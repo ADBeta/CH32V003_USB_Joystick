@@ -1,29 +1,47 @@
 /******************************************************************************
-* 
+* USB Joystick handler for a 3 Axis, 1 Button Jotstick + 
 *
-* C7
-* D2 (A3)
-* D3 (A4)
-* D4 (A7)
+* Pinout:
+*   BTN        D5
+*   Rotation   D6 (A6)
+*   Horizontal A1 (A0)
+*   Vertical   A2 (A1)
 *
-* ADBeta (c)    28 Aug 2024
+* Notes:
+*   USB Gamepad Joystick Axis must be in range between -128 and 128
+*   (Which bytes in buffer????
+*   USB Gamepad Buttons (???)
+*
+* (c) ADBeta 2024
+* Sep 2024    Ver0.0
 ******************************************************************************/
 #include "ch32v003fun.h"
 #include <stdio.h>
 
 #include "lib_gpioctrl.h"
 
-#define BTN_TOP_PIN  GPIO_PC7
-#define AXIS_ROT_PIN GPIO_ADC_A3
-#define AXIS_HOR_PIN GPIO_ADC_A4
-#define AXIS_VER_PIN GPIO_ADC_A7
+// Gamepad Pinouts
+#define BTN_TOP_PIN  GPIO_PD5
+#define AXIS_ROT_PIN GPIO_ADC_A6
+#define AXIS_HOR_PIN GPIO_ADC_A1
+#define AXIS_VER_PIN GPIO_ADC_A0
 
-#define AXIS_MAXIMUM    255
-#define AXIS_HYST_CEIL  148
-#define AXIS_HYST_MIDL  128
-#define AXIS_HYST_FLOOR 108
+// Linear Mapping variales, Magic numbers to speed up execution
+// INPUT is   (1.0 * (axis->max - axis->min)
+// OUTPUT is  (1.0 * (127 - (-128));
+#define AXIS_MAP_INPUT_RANGE  (1.0 * (axis->max - axis->min))
+#define AXIS_MAP_OUTPUT_RANGE ((float)255.0)
+// USB Gamepads expect analog variables between -128 and 128
+#define AXIS_MAP_MINIMUM    -128
+#define AXIS_MAP_MAXIMUM     128
+
+// Mapping output Hysteresis variables
+#define AXIS_HYST_CEIL   15
+#define AXIS_HYST_MIDL   0
+#define AXIS_HYST_FLOOR -15
 
 
+/*** Type definitions ********************************************************/
 typedef struct {
 	// ADC Rave min/max/current values
 	uint16_t min;
@@ -31,15 +49,15 @@ typedef struct {
 	uint16_t cur;
 
 	// Output value from mapping to a new range and applying deadzone
-	uint16_t mapped;
+	int8_t mapped;
 } joystick_axis_t;
-
 
 static joystick_axis_t axis_rot = {50,  950};
 static joystick_axis_t axis_hor = {200, 800};
 static joystick_axis_t axis_ver = {200, 800};
 
 
+/*** Aux function definitions ************************************************/
 /// @brief Gets the Axis potentiometer value directly from the ADC, adjust
 /// minimum and maximum ends of travel if they are exceeded
 /// @param GPIO_ANALOG_CHANNEL, gpioctrl Analog pin to read from
@@ -50,15 +68,11 @@ void get_joystick_values(const GPIO_ANALOG_CHANNEL chan, joystick_axis_t *axis)
 	// Get the current value directly from the ADC Channel
 	axis->cur = gpio_analog_read(chan);
 
-	// TODO: Make this neater
 	// Adjust the ends of travel if they are exceeded
 	if(axis->cur > axis->max)
-	{
 		axis->max = axis->cur;
-	} else if (axis->cur < axis->min)
-	{
+	else if (axis->cur < axis->min)
 		axis->min = axis->cur;
-	}
 }
 
 /// @brief maps the raw ADC joystick values to a new range between 
@@ -67,9 +81,13 @@ void get_joystick_values(const GPIO_ANALOG_CHANNEL chan, joystick_axis_t *axis)
 /// @return none
 void get_joystick_mapped(joystick_axis_t *axis)
 {
-	// Map the ADC Value into the new range
-	float slope = (float)AXIS_MAXIMUM / (axis->max - axis->min);
-	axis->mapped = slope * (axis->cur - axis->min);
+	// Overall process of linear mapping the ADC Values
+	// float slope = 1.0 * (128 - (-128)) / (1024 - 0);
+	// float output = -128 + slope * (input - 0) - 128;
+
+	// Simplified Mapping the ADC Value into the new range
+	const float slope = AXIS_MAP_OUTPUT_RANGE / AXIS_MAP_INPUT_RANGE;
+	axis->mapped = slope * (axis->cur - axis->min) - AXIS_MAP_MAXIMUM;
 
 	// Apply deadzone checks
 	if(axis->mapped >= AXIS_HYST_FLOOR && axis->mapped <= AXIS_HYST_CEIL)
@@ -77,17 +95,18 @@ void get_joystick_mapped(joystick_axis_t *axis)
 }
 
 
+/*** Main ********************************************************************/
 int main()
 {
 	SystemInit();
 	
-	// PC7 is a Digital Input, pulled HIGH
-	gpio_set_mode(GPIO_PC7, INPUT_PULLUP);
+	// BTN is a Digital Input, pulled HIGH
+	gpio_set_mode(BTN_TOP_PIN, INPUT_PULLUP);
 
-	// PD2, PD3 and PD4 are Analog Input
-	gpio_set_mode(GPIO_A3, INPUT_ANALOG);
-	gpio_set_mode(GPIO_A4, INPUT_ANALOG);
-	gpio_set_mode(GPIO_A7, INPUT_ANALOG);
+	// All Axes are Analog Input
+	gpio_set_mode(GPIO_A6, INPUT_ANALOG);
+	gpio_set_mode(GPIO_A1, INPUT_ANALOG);
+	gpio_set_mode(GPIO_A0, INPUT_ANALOG);
 
 	// Initiliase the ADC to use 24MHz clock, and Sample for 73 Clock Cycles
 	gpio_init_adc(ADC_CLOCK_DIV_2, ADC_SAMPLE_CYCLES_73);
