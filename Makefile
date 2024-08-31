@@ -8,7 +8,8 @@ EXTRALIB_DIR := $(TOOLKIT_DIR)/extralibs
 TARGET := joystick
 
 # Compiles every additional .c file
-TARGET_SOURCE_FILES := $(filter-out $(SRC_DIR)/$(TARGET).c, $(wildcard $(SRC_DIR)/*.c))
+TARGET_SOURCE_FILES := $(filter-out $(SRC_DIR)/$(TARGET).c, $(wildcard $(SRC_DIR)/*.c)) 
+TARGET_SOURCE_FILES += $(SRC_DIR)/rv003usb/rv003usb.c $(SRC_DIR)/rv003usb/rv003usb.S
 
 # Change this to specify your MCU model, for compilation
 TARGET_MCU := CH32V003
@@ -38,10 +39,13 @@ TARGET_MCU_LD:=0
 CFLAGS_ARCH += -march=rv32ec -mabi=ilp32e -DCH32V003=1
 
 # Compiler flags, warnings, dirs etc
+# /lib and /rv003usb is for USB Support
 CFLAGS := \
 -g -Os -flto -ffunction-sections -fdata-sections -fmessage-length=0 -msmall-data-limit=8 \
 $(CFLAGS_ARCH) -static-libgcc \
 -I/usr/riscv64-unknown-elf/include/ \
+-I$(SRC_DIR)/lib \
+-I$(SRC_DIR)/rv003usb \
 -I$(EXTRALIB_DIR) \
 -I$(TOOLKIT_DIR) \
 -I$(SRC_DIR) \

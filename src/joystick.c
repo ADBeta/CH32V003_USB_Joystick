@@ -1,35 +1,54 @@
 /******************************************************************************
-* USB Joystick handler for a 3 Axis, 1 Button Jotstick + 
+* USB Joystick handler for a 3 Axis & 1 Button Jotstick + 4 Auxillary buttons
+* and a Left-handed and Right-handed mode selection
 *
 * Pinout:
-*   BTN        D5
-*   Rotation   D6 (A6)
-*   Horizontal A1 (A0)
-*   Vertical   A2 (A1)
+*   Handedness Switch      D?
+*
+*   Joystick Button        D5
+*   Auxiliary Button 1     D?
+*	Auxiliary Button 2     D?
+*   Auxiliary Button 3     D?
+*   Auxiliary Button 4     D?
+*
+*   Horizontal             A2 (A1)
+*   Vertical               A1 (A0)
+*   Rotation               D6 (A6)
 *
 * Notes:
 *   USB Gamepad Joystick Axis must be in range between -128 and 128
-*   (Which bytes in buffer????
-*   USB Gamepad Buttons (???)
+*   Send 4 Bytes to the USB Buffer, [0] [1] and [2] are Axis. [3] is an 8bit
+*   button mask (8 Buttons Max)
+*
+*   A Switch on the device can switch it between Right and Left Handed modes
 *
 * (c) ADBeta 2024
-* Sep 2024    Ver0.0
+* Sep 2024    Ver0.9
 ******************************************************************************/
 #include "ch32v003fun.h"
+#include "rv003usb.h"
 #include <stdio.h>
 
 #include "lib_gpioctrl.h"
 
-// Gamepad Pinouts
-#define BTN_TOP_PIN  GPIO_PD5
-#define AXIS_ROT_PIN GPIO_ADC_A6
+/*** Joystick Pinout *********************************************************/
+#define SW_HANDEDNESS  GPIO_PC1 
+#define BTN_JST_PIN    GPIO_PD5
+// TODO:
+#define BTN_AUX_1_PIN  GPIO_PD5
+#define BTN_AUX_2_PIN  GPIO_PD5
+#define BTN_AUX_3_PIN  GPIO_PD5
+#define BTN_AUX_4_PIN  GPIO_PD5
+
 #define AXIS_HOR_PIN GPIO_ADC_A1
 #define AXIS_VER_PIN GPIO_ADC_A0
+#define AXIS_ROT_PIN GPIO_ADC_A6
 
-// Linear Mapping variales, Magic numbers to speed up execution
+/*** Constant Variables ******************************************************/
+// Linear Mapping variables, Magic numbers to speed up execution
 // INPUT is   (1.0 * (axis->max - axis->min)
 // OUTPUT is  (1.0 * (127 - (-128));
-#define AXIS_MAP_INPUT_RANGE  (1.0 * (axis->max - axis->min))
+#define AXIS_MAP_INPUT_RANGE  ((float)(axis->max - (float)axis->min))
 #define AXIS_MAP_OUTPUT_RANGE ((float)255.0)
 // USB Gamepads expect analog variables between -128 and 128
 #define AXIS_MAP_MINIMUM    -128
@@ -42,8 +61,15 @@
 
 
 /*** Type definitions ********************************************************/
+// Left / Right Handedness
+typedef enum {
+	LEFT_HANDED_MODE,
+	RIGHT_HANDED_MODE,
+} handedness_t;
+
+// Joystick Axis
 typedef struct {
-	// ADC Rave min/max/current values
+	// ADC Raw min/max/current values
 	uint16_t min;
 	uint16_t max;
 	uint16_t cur;
@@ -52,9 +78,17 @@ typedef struct {
 	int8_t mapped;
 } joystick_axis_t;
 
-static joystick_axis_t axis_rot = {50,  950};
-static joystick_axis_t axis_hor = {200, 800};
-static joystick_axis_t axis_ver = {200, 800};
+/*** Global Variables ********************************************************/
+// Left or Right handed modes (Left Handed masterrace)
+static handedness_t g_handedness = LEFT_HANDED_MODE;
+
+// Joystick Axis
+static joystick_axis_t g_axis_hor = {190, 810};
+static joystick_axis_t g_axis_ver = {190, 810};
+static joystick_axis_t g_axis_rot = {50,  950};
+
+// Button bit mask. Up to 8 Buttons
+uint8_t g_button_mask = 0x00;
 
 
 /*** Aux function definitions ************************************************/
@@ -99,42 +133,97 @@ void get_joystick_mapped(joystick_axis_t *axis)
 int main()
 {
 	SystemInit();
-	
-	// BTN is a Digital Input, pulled HIGH
-	gpio_set_mode(BTN_TOP_PIN, INPUT_PULLUP);
 
-	// All Axes are Analog Input
-	gpio_set_mode(GPIO_A6, INPUT_ANALOG);
-	gpio_set_mode(GPIO_A1, INPUT_ANALOG);
-	gpio_set_mode(GPIO_A0, INPUT_ANALOG);
+	// Ensures USB re-numeration after bootloader or reset
+	Delay_Ms(1);
+	usb_setup();
+
+	// Handedness Switch is a floating input
+	// TODO:
+
+	// All Buttons are digital input, pulled HIGH
+	gpio_set_mode(BTN_JST_PIN,   INPUT_PULLUP);
+	gpio_set_mode(BTN_AUX_1_PIN, INPUT_PULLUP);
+	gpio_set_mode(BTN_AUX_2_PIN, INPUT_PULLUP);
+	gpio_set_mode(BTN_AUX_3_PIN, INPUT_PULLUP);
+	gpio_set_mode(BTN_AUX_4_PIN, INPUT_PULLUP);
+
+	// All Axes are analog input
+	gpio_set_mode(GPIO_A1, INPUT_ANALOG);  // Horizontal
+	gpio_set_mode(GPIO_A0, INPUT_ANALOG);  // Vertical
+	gpio_set_mode(GPIO_A6, INPUT_ANALOG);  // Rotation
 
 	// Initiliase the ADC to use 24MHz clock, and Sample for 73 Clock Cycles
 	gpio_init_adc(ADC_CLOCK_DIV_2, ADC_SAMPLE_CYCLES_73);
 	
 
+	// Loop forever getting joystick data
 	while(1)
 	{
-		// Read the buttons state
-		uint8_t btn_top = gpio_digital_read(BTN_TOP_PIN);
+		// Read the buttons state(s). Invert them as they are PULLUP
+		g_button_mask = 0x00                          |
+			(!gpio_digital_read(BTN_JST_PIN))         |
+			(!gpio_digital_read(BTN_AUX_1_PIN) << 1)  |
+			(!gpio_digital_read(BTN_AUX_2_PIN) << 2)  |
+			(!gpio_digital_read(BTN_AUX_3_PIN) << 3)  |
+			(!gpio_digital_read(BTN_AUX_4_PIN) << 4);
+	
 
 		// Read the potentiometer values
-		get_joystick_values(AXIS_ROT_PIN, &axis_rot);
-		get_joystick_values(AXIS_HOR_PIN, &axis_hor);
-		get_joystick_values(AXIS_VER_PIN, &axis_ver);
+		get_joystick_values(AXIS_ROT_PIN, &g_axis_rot);
+		get_joystick_values(AXIS_HOR_PIN, &g_axis_hor);
+		get_joystick_values(AXIS_VER_PIN, &g_axis_ver);
 
-		get_joystick_mapped(&axis_rot);
-		get_joystick_mapped(&axis_hor);
-		get_joystick_mapped(&axis_ver);
+		// Invert Horizontal and Vertical values if in RIGHT_HANDED_MODE
+		// LEFT_HANDED_MODE is default
+		if(g_handedness == RIGHT_HANDED_MODE)
+		{
+			g_axis_hor.cur = (g_axis_hor.max - g_axis_hor.cur) + g_axis_hor.min;
+			g_axis_ver.cur = (g_axis_ver.max - g_axis_ver.cur) + g_axis_ver.min;
+		}
 
-		printf("rot: %d\n", axis_rot.mapped);
-		printf("hor: %d\n", axis_hor.mapped);
-		printf("ver: %d\n\n", axis_ver.mapped);
+
+		// Map the analog values to -128 to 127
+		get_joystick_mapped(&g_axis_rot);
+		get_joystick_mapped(&g_axis_hor);
+		get_joystick_mapped(&g_axis_ver);
 
 
-		// Print the state values
-		//printf("%d\t%d\t%d\t%d\n", btn_top, pot_rot, pot_hor, pot_ver);
+		//printf("H:%d\tV:%d\tR:%d\n\n", g_axis_hor.mapped, g_axis_ver.mapped, g_axis_rot.mapped);
 
-		// Wait for next loop
+		// Wait for next loop TODO: Lower
 		Delay_Ms(50);
 	}
+
+
 }
+
+
+/*** USB Functions ***********************************************************/
+void usb_handle_user_in_request(struct usb_endpoint * e, 
+								uint8_t * scratchpad,
+								int endp, 
+								uint32_t sendtok, 
+								struct rv003usb_internal * ist )
+{
+	// If this endpoint is the one we want:
+	if(endp)
+	{
+		// Create a buffer to send to the USB Host, using the Axis and Button
+		// variables
+		const uint8_t joystick_data[4] = {
+			(uint8_t)g_axis_hor.mapped,
+			(uint8_t)g_axis_ver.mapped,
+			(uint8_t)g_axis_rot.mapped,
+			g_button_mask
+		};
+
+		// Send that buffer to the USB Host
+		// (4 bytes, CRC Enabled, using send token)
+		usb_send_data(joystick_data, 4, 0, sendtok);
+	}
+
+	// If it's a control transfer, send empty to NACK
+	else usb_send_empty(sendtok);
+}
+
