@@ -3,13 +3,13 @@
 * and a Left-handed and Right-handed mode selection
 *
 * Pinout:
-*   Handedness Switch      D?
+*   Handedness Switch      C0
 *
 *   Joystick Button        D5
-*   Auxiliary Button 1     D?
-*	Auxiliary Button 2     D?
-*   Auxiliary Button 3     D?
-*   Auxiliary Button 4     D?
+*   Auxiliary Button 1     C1
+*	Auxiliary Button 2     C2
+*   Auxiliary Button 3     C3
+*   Auxiliary Button 4     C4
 *
 *   Horizontal             A2 (A1)
 *   Vertical               A1 (A0)
@@ -32,13 +32,12 @@
 #include "lib_gpioctrl.h"
 
 /*** Joystick Pinout *********************************************************/
-#define SW_HANDEDNESS  GPIO_PC1 
+#define SW_HANDEDNESS  GPIO_PC0 
 #define BTN_JST_PIN    GPIO_PD5
-// TODO:
-#define BTN_AUX_1_PIN  GPIO_PD5
-#define BTN_AUX_2_PIN  GPIO_PD5
-#define BTN_AUX_3_PIN  GPIO_PD5
-#define BTN_AUX_4_PIN  GPIO_PD5
+#define BTN_AUX_1_PIN  GPIO_PC4
+#define BTN_AUX_2_PIN  GPIO_PC3
+#define BTN_AUX_3_PIN  GPIO_PC2
+#define BTN_AUX_4_PIN  GPIO_PC1
 
 #define AXIS_HOR_PIN GPIO_ADC_A1
 #define AXIS_VER_PIN GPIO_ADC_A0
@@ -63,8 +62,8 @@
 /*** Type definitions ********************************************************/
 // Left / Right Handedness
 typedef enum {
-	LEFT_HANDED_MODE,
 	RIGHT_HANDED_MODE,
+	LEFT_HANDED_MODE,
 } handedness_t;
 
 // Joystick Axis
@@ -79,9 +78,6 @@ typedef struct {
 } joystick_axis_t;
 
 /*** Global Variables ********************************************************/
-// Left or Right handed modes (Left Handed masterrace)
-static handedness_t g_handedness = LEFT_HANDED_MODE;
-
 // Joystick Axis
 static joystick_axis_t g_axis_hor = {190, 810};
 static joystick_axis_t g_axis_ver = {190, 810};
@@ -139,7 +135,7 @@ int main()
 	usb_setup();
 
 	// Handedness Switch is a floating input
-	// TODO:
+	gpio_set_mode(SW_HANDEDNESS, INPUT_FLOATING);
 
 	// All Buttons are digital input, pulled HIGH
 	gpio_set_mode(BTN_JST_PIN,   INPUT_PULLUP);
@@ -174,9 +170,11 @@ int main()
 		get_joystick_values(AXIS_HOR_PIN, &g_axis_hor);
 		get_joystick_values(AXIS_VER_PIN, &g_axis_ver);
 
-		// Invert Horizontal and Vertical values if in RIGHT_HANDED_MODE
-		// LEFT_HANDED_MODE is default
-		if(g_handedness == RIGHT_HANDED_MODE)
+		
+		// Invert Horizontal and Vertical values if the Handedness switch reads
+		// RIGHT_HANDED_MODE (0). 
+		// Do nothing if Switch is in LEFT_HANDED_MODE (1) (default)
+		if((handedness_t)gpio_digital_read(SW_HANDEDNESS) == RIGHT_HANDED_MODE)
 		{
 			g_axis_hor.cur = (g_axis_hor.max - g_axis_hor.cur) + g_axis_hor.min;
 			g_axis_ver.cur = (g_axis_ver.max - g_axis_ver.cur) + g_axis_ver.min;
@@ -188,14 +186,9 @@ int main()
 		get_joystick_mapped(&g_axis_hor);
 		get_joystick_mapped(&g_axis_ver);
 
-
-		//printf("H:%d\tV:%d\tR:%d\n\n", g_axis_hor.mapped, g_axis_ver.mapped, g_axis_rot.mapped);
-
-		// Wait for next loop TODO: Lower
-		Delay_Ms(50);
+		// Wait for next loop (50FPS Refresh) 
+		Delay_Ms(20);
 	}
-
-
 }
 
 
@@ -226,4 +219,3 @@ void usb_handle_user_in_request(struct usb_endpoint * e,
 	// If it's a control transfer, send empty to NACK
 	else usb_send_empty(sendtok);
 }
-
